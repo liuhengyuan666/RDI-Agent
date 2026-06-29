@@ -100,7 +100,7 @@ def verify_toolchain_executable(lang: str) -> tuple[bool, str]:
 # §0.5 Step 0: Static Check Probe (before LLM / runtime)
 # ---------------------------------------------------------------------------
 
-def run_static_check(state: RealityAgentState) -> dict[str, Any]:
+def run_static_check(detected_language: Optional[str] = None) -> dict[str, Any]:
     """
     First-order probe: compile / static check command.
     
@@ -120,7 +120,7 @@ def run_static_check(state: RealityAgentState) -> dict[str, Any]:
     explicit_cmd = os.getenv("RDI_STATIC_COMMAND")
     
     # Priority 2: auto-infer from detected language
-    lang = state.detected_language or "unknown"
+    lang = detected_language or "unknown"
     auto_cmds = {
         "rust": "cargo check --message-format=json",
         "go": "go build ./...",
@@ -416,15 +416,167 @@ def check_environment(state: RealityAgentState) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# §10 Step 3: Differential Test (stub — Phase 4)
+# §10 Step 3: Differential Test (Phase 4 — real implementation)
 # ---------------------------------------------------------------------------
 
 def run_differential_test(old_state: RealityAgentState, new_state: RealityAgentState) -> bool:
     """
     §10 Step 3: Execute differential test after Change One Thing.
-
-    Compares outputs before and after the isolated change.
-    Phase 3: returns False (no change applied). Phase 4: real diff.
+    
+    Compares reproduce command outputs before and after the isolated change.
+    If the new output differs from the old output in a way that suggests
+    the bug is fixed (exit code changed from non-zero to zero), returns True.
+    
+    Phase 4: Real diff using reproduce_exit_code comparison.
     """
-    # Phase 3: fail-safe — no changes yet
+    # Compare reproduce exit codes: old (non-zero = bug) vs new (zero = fixed)
+    old_exit = old_state.reproduce_exit_code
+    new_exit = new_state.reproduce_exit_code
+    
+    # Bug was reproduced before (non-zero) and now passes (zero) → success
+    if old_exit not in (None, 0, -1) and new_exit == 0:
+        return True
+    
+    # If no reproduce data available, fall back to checking if any tool output changed
+    old_outputs = "\n".join(old_state.tool_outputs)
+    new_outputs = "\n".join(new_state.tool_outputs)
+    if old_outputs != new_outputs:
+        # Output changed — could be fix or could be different error
+        # Conservative: return False (requires human review)
+        return False
+    
+    # No change detected — modification had no effect
     return False
+
+
+# ---------------------------------------------------------------------------
+# §5 Change One Thing: Code Modification Tools (Phase 4)
+# ---------------------------------------------------------------------------
+
+import shutil
+import tempfile
+
+
+def create_sandbox(project_dir: str) -> str:
+    """
+    Create a temporary sandbox copy of the project directory.
+    
+    Returns:
+        Path to the sandbox directory (caller is responsible for cleanup).
+    """
+    sandbox = tempfile.mkdtemp(prefix="rdi-sandbox-")
+    # Copy project contents to sandbox
+    for item in os.listdir(project_dir):
+        src = os.path.join(project_dir, item)
+        dst = os.path.join(sandbox, item)
+        if os.path.isdir(src):
+            shutil.copytree(src, dst, ignore=shutil.ignore_patterns('.git', 'target', '__pycache__', 'node_modules'))
+        else:
+            shutil.copy2(src, dst)
+    return sandbox
+
+
+def apply_line_change(file_path: str, line_num: int, new_content: str) -> bool:
+    """
+    Replace a specific line in a file (1-indexed).
+    
+    Returns:
+        True if change was applied, False if line number out of range.
+    """
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        
+        if line_num < 1 or line_num > len(lines):
+            return False
+        
+        # Ensure newline
+        if not new_content.endswith("\n"):
+            new_content += "\n"
+        lines[line_num - 1] = new_content
+        
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+        return True
+    except Exception:
+        return False
+
+
+def apply_regex_change(file_path: str, pattern: str, replacement: str) -> bool:
+    """
+    Apply regex replacement to file content.
+    
+    Returns:
+        True if at least one match was replaced, False otherwise.
+    """
+    import re
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        
+        new_content, count = re.subn(pattern, replacement, content)
+        if count == 0:
+            return False
+        
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+        return True
+    except Exception:
+        return False
+
+
+def reproduce_in_sandbox(sandbox_dir: str, reproduce_cmd: str) -> Dict[str, Any]:
+    """
+    Run the reproduce command inside the sandbox directory.
+    
+    The reproduce command is expected to be a relative path or use the sandbox
+    directory as working directory.
+    
+    Returns dict compatible with reproduce_issue output format.
+    """
+    import subprocess
+    
+    try:
+        result = subprocess.run(
+            reproduce_cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            cwd=sandbox_dir,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "tool_outputs": ["ERROR: Reproduce command timed out after 300s in sandbox."],
+            "reproduced": False,
+            "exit_code": -2,
+            "stdout": "",
+            "stderr": "Command timed out",
+            "command": reproduce_cmd,
+        }
+    except Exception as e:
+        return {
+            "tool_outputs": [f"ERROR: Failed to execute reproduce command in sandbox: {e}"],
+            "reproduced": False,
+            "exit_code": -3,
+            "stdout": "",
+            "stderr": str(e),
+            "command": reproduce_cmd,
+        }
+    
+    reproduced = result.returncode != 0
+    output_summary = (
+        f"Sandbox command: {reproduce_cmd}\n"
+        f"Exit code: {result.returncode} ({'BUG REPRODUCED' if reproduced else 'No bug in this run'})\n"
+        f"stdout length: {len(result.stdout)} chars\n"
+        f"stderr length: {len(result.stderr)} chars"
+    )
+    
+    return {
+        "tool_outputs": [output_summary],
+        "reproduced": reproduced,
+        "exit_code": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "command": reproduce_cmd,
+    }

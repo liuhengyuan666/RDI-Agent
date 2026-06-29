@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from reality_agent.llm import get_llm
 from reality_agent.state import RealityAgentState
 from reality_agent.tools.debug_tools import reproduce_issue
+from reality_agent.tools.traps_detection import detect_trap
 
 
 # ---------------------------------------------------------------------------
@@ -131,13 +132,30 @@ def reality_check_node(state: RealityAgentState) -> Dict[str, Any]:
     # This populates tool_outputs with the actual execution evidence
     reproduce_result = reproduce_issue(state)
     
-    # Merge reproduce outputs into accumulated state (Annotated[list, operator.add])
+    # Map probe results to RealityAgentState fields (prevents Pydantic silent-drop)
     updates: Dict[str, Any] = {
         "current_phase": "Reality_Check",
+        "reproduced": reproduce_result.get("reproduced"),
+        "reproduce_exit_code": reproduce_result.get("exit_code"),
+        "reproduce_output": (
+            f"stdout:\n{reproduce_result.get('stdout', '')}\n"
+            f"stderr:\n{reproduce_result.get('stderr', '')}"
+        ).strip(),
     }
-    for key, val in reproduce_result.items():
-        if key not in updates:
-            updates[key] = val
+    
+    # Append tool output to audit trail (Annotated[list, operator.add])
+    tool_output = reproduce_result.get("tool_outputs", [])
+    if tool_output:
+        updates["tool_outputs"] = tool_output
+    
+    # Detect optimization traps based on user request and current evidence
+    trap_result = detect_trap(state)
+    if trap_result.get("trap_detected"):
+        updates["trap_detected"] = trap_result["trap_detected"]
+        updates["trap_details"] = trap_result["trap_details"]
+        updates["knowledge_gained"] = [
+            f"Trap detected: {trap_result['trap_detected']} — {trap_result['trap_details']}"
+        ]
     
     # Check if LLM mode is enabled
     if os.getenv("RDI_LLM_MODE", "stub").lower() != "real":
@@ -188,8 +206,14 @@ Tool outputs:
             f"LLM call failed ({e}), falling back to heuristic. "
             "Consider checking LLM_PROVIDER / LLM_API_KEY configuration."
         ]
-        # Merge reproduce results so they aren't lost
-        for key, val in reproduce_result.items():
-            if key not in fallback:
-                fallback[key] = val
+        # Map reproduce results to RealityAgentState fields (same as main path)
+        fallback["reproduced"] = reproduce_result.get("reproduced")
+        fallback["reproduce_exit_code"] = reproduce_result.get("exit_code")
+        fallback["reproduce_output"] = (
+            f"stdout:\n{reproduce_result.get('stdout', '')}\n"
+            f"stderr:\n{reproduce_result.get('stderr', '')}"
+        ).strip()
+        tool_output = reproduce_result.get("tool_outputs", [])
+        if tool_output:
+            fallback["tool_outputs"] = tool_output
         return fallback

@@ -107,12 +107,19 @@ def route_after_discovery(state: RealityAgentState) -> Literal["verify_reality",
 
 def route_after_gate(state: RealityAgentState) -> Literal["isolate_iteration", "build_knowledge", "observe_freeze"]:
     """
-    §4 Evidence Gate — 分级拦截策略.
+    §4 Evidence Gate — 分级拦截策略 with PHYSICAL CROSS-VALIDATION.
 
-    Strict routing logic (no LLM involved here).
-    v1 严格拦截：哪怕 Evidence_Level == "Verified"，也必须 provenance_verified=True。
+    Machine facts always override LLM self-assessment labels.
+    
+    Priority (highest first):
+    1. Freeze state (runtime or persistent) → observe_freeze
+    2. Static check FAILED → build_knowledge (compilation error is definitive evidence)
+    3. Runtime probe executed but NOT reproduced → build_knowledge (no bug to fix)
+    4. No provenance → build_knowledge
+    5. LLM evidence_level + provenance → isolate_iteration (only if probes agree)
+    6. Observation / Hypothesis → build_knowledge
     """
-    # 最高优先级：检查运行时 freeze 状态（当前会话）或持久化 ledger（跨会话）
+    # 1. 最高优先级：冻结状态
     if state.freeze_until is not None:
         return "observe_freeze"
 
@@ -121,15 +128,23 @@ def route_after_gate(state: RealityAgentState) -> Literal["isolate_iteration", "
     if frozen:
         return "observe_freeze"
 
-    # 核心防线：没有 provenance_verified，一切免谈
+    # 2. 物理交叉验证：静态检查失败 = 铁证，但必须先编译通过才能谈修改
+    if state.static_check_passed is False:
+        return "build_knowledge"
+
+    # 3. 物理交叉验证：运行时探针已执行但未复现 = 没有可修复的bug
+    if state.reproduced is False:
+        return "build_knowledge"
+
+    # 4. 没有 provenance_verified，一切免谈
     if not state.provenance_verified:
         return "build_knowledge"
 
-    # 测量已验证，按证据等级分流
+    # 5. 测量已验证，且探针结果与 LLM 标签一致（或 LLM 未参与）
     if state.evidence_level in ("Evidence", "Verified"):
         return "isolate_iteration"
 
-    # 保守兜底：Observation / Hypothesis → 禁止修改
+    # 6. 保守兜底：Observation / Hypothesis → 禁止修改
     return "build_knowledge"
 
 

@@ -99,11 +99,20 @@ def environment_discovery_node(state: RealityAgentState) -> Dict[str, Any]:
         ]
     else:
         # Toolchain available — run static check probe (§0.5)
-        static_result = run_static_check(state)
-        # Merge static check outputs into state
-        for key, val in static_result.items():
-            if key not in updates:
-                updates[key] = val
+        # Pass detected_language directly (state.detected_language is still None here)
+        static_result = run_static_check(detected_language=lang)
+        
+        # Map probe results to RealityAgentState fields (prevents Pydantic silent-drop)
+        updates["static_check_passed"] = static_result.get("static_check_passed")
+        updates["static_check_output"] = (
+            f"stdout:\n{static_result.get('static_stdout', '')}\n"
+            f"stderr:\n{static_result.get('static_stderr', '')}"
+        ).strip()
+        
+        # Append tool output to audit trail
+        tool_output = static_result.get("tool_outputs", [])
+        if tool_output:
+            updates.setdefault("tool_outputs", []).extend(tool_output)
         
         static_passed = static_result.get("static_check_passed")
         if static_passed is False:

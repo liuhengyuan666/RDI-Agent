@@ -5,6 +5,7 @@ from typing import Any
 
 from langchain_anthropic import ChatAnthropic
 from langchain_openai import ChatOpenAI
+from pydantic import SecretStr
 
 # ---------------------------------------------------------------------------
 # LLM Provider Configuration (env-driven, pluggable)
@@ -55,7 +56,7 @@ def get_llm() -> Any:
             model=LLM_MODEL,
             temperature=LLM_TEMPERATURE,
             base_url=base_url,
-            openai_api_key=api_key,
+            api_key=SecretStr(api_key),  # Standard parameter name (replaces deprecated openai_api_key)
         )
     else:
         raise ValueError(

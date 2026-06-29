@@ -157,6 +157,32 @@ class RealityAgentState(BaseModel):
     )
 
     # ------------------------------------------------------------------
+    # 9. Machine probe evidence (§0 Static Check, §10 Runtime Probe)
+    #    These fields prevent Pydantic silent-drop of probe results across nodes.
+    #    Machine facts always override LLM self-assessment labels.
+    # ------------------------------------------------------------------
+    static_check_passed: Optional[bool] = Field(
+        default=None,
+        description="静态检查（编译/语法探针）结果: True=通过, False=失败, None=未执行",
+    )
+    static_check_output: Optional[str] = Field(
+        default=None,
+        description="静态检查原始输出（stdout+stderr），用于根因分析",
+    )
+    reproduced: Optional[bool] = Field(
+        default=None,
+        description="运行时复现结果: True=Bug复现, False=未复现, None=未执行",
+    )
+    reproduce_exit_code: Optional[int] = Field(
+        default=None,
+        description="复现命令进程退出码（101=Rust panic, 非0=异常）",
+    )
+    reproduce_output: Optional[str] = Field(
+        default=None,
+        description="运行时复现原始输出（stdout+stderr）",
+    )
+
+    # ------------------------------------------------------------------
     # 10. Environment discovery (§0 Zero-Config)
     # ------------------------------------------------------------------
     detected_language: Optional[str] = Field(

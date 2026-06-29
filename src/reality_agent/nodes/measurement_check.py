@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from reality_agent.llm import get_llm
 from reality_agent.state import RealityAgentState
+from reality_agent.tools.debug_tools import check_git_consistency
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +132,16 @@ def measurement_check_node(state: RealityAgentState) -> Dict[str, Any]:
         return _heuristic_measurement_check(state)
 
     try:
+        # Execute git consistency check before LLM analysis
+        # This provides physical evidence about version alignment
+        updates: Dict[str, Any] = {}
+        git_result = check_git_consistency(state)
+        
+        # Append git check results to tool outputs for audit trail
+        git_tool_output = git_result.get("tool_outputs", [])
+        if git_tool_output:
+            updates["tool_outputs"] = git_tool_output
+        
         llm = get_llm()
         structured_llm = llm.with_structured_output(MeasurementCheckBrainOutput)
 
@@ -140,6 +151,9 @@ Verified facts:
 
 Tool outputs:
 {chr(10).join(f"- {o}" for o in state.tool_outputs) if state.tool_outputs else "(none)"}
+
+Git consistency:
+{chr(10).join(f"- {o}" for o in git_tool_output) if git_tool_output else "(not checked)"}
 """
 
         result: MeasurementCheckBrainOutput = structured_llm.invoke(
@@ -149,7 +163,8 @@ Tool outputs:
             ]
         )
 
-        return {
+        # Merge LLM result with updates (which may contain tool_outputs from git check)
+        llm_updates = {
             "current_phase": "Measurement_Check",
             "provenance_verified": result.provenance_verified,
             "data_sources_aligned": result.data_sources_aligned,
@@ -161,6 +176,8 @@ Tool outputs:
                 f"Reason: {result.audit_reason or 'all checks passed'}"
             ],
         }
+        updates.update(llm_updates)
+        return updates
     except Exception as e:
         fallback = _heuristic_measurement_check(state)
         fallback["knowledge_gained"] = [
