@@ -21,19 +21,25 @@ DEFAULT_BENCHMARK_COMMAND = "echo 'No RDI_BENCHMARK_COMMAND set. Please configur
 # §0 Zero-Config: Environment Discovery
 # ---------------------------------------------------------------------------
 
-def discover_project_language() -> str:
+def discover_project_language(search_dirs: Optional[List[str]] = None) -> str:
     """
     Zero-Config: Auto-discover project language by physical feature markers.
     
-    Scans os.getcwd() for well-known manifest files (Cargo.toml, go.mod, 
-    pyproject.toml, package.json). Returns the detected language or 'unknown'.
+    Scans the provided directories (or os.getcwd() if none) for well-known 
+    manifest files (Cargo.toml, go.mod, pyproject.toml, package.json). 
+    Returns the detected language or 'unknown'.
+    
     For monorepos with multiple markers, returns 'polyglot' (leaves to LLM 
     or human for secondary intent classification).
+    
+    Args:
+        search_dirs: List of directories to scan. If None, scans cwd only.
     """
     import os
     from pathlib import Path
     
-    cwd = Path(os.getcwd())
+    if search_dirs is None:
+        search_dirs = [os.getcwd()]
     
     markers = {
         "rust": ["Cargo.toml", "Cargo.lock"],
@@ -43,9 +49,18 @@ def discover_project_language() -> str:
     }
     
     found = []
-    for lang, files in markers.items():
-        if any((cwd / f).exists() for f in files):
-            found.append(lang)
+    for dir_path in search_dirs:
+        cwd = Path(dir_path)
+        if not cwd.exists():
+            continue
+        for lang, files in markers.items():
+            if any((cwd / f).exists() for f in files):
+                if lang not in found:
+                    found.append(lang)
+        # Return immediately if we found exactly one language in this directory
+        # This prioritizes earlier directories (target dir over cwd fallback)
+        if len(found) == 1:
+            return found[0]
     
     if not found:
         return "unknown"

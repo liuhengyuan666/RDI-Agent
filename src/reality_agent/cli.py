@@ -281,14 +281,16 @@ def _main() -> int:
         # Compile and run the agent
         agent = compile_agent()
 
-        # Stream outputs for verbose mode
         if args.verbose:
             print("\n[Agent Stream]", file=sys.stderr)
+            final_state = None
             for step in agent.stream(state, stream_mode="values"):
                 phase = step.get("current_phase", "unknown")
                 print(f"  → Phase: {phase}", file=sys.stderr)
-
-        final_state = agent.invoke(state)
+                final_state = step  # Last iteration is the final state
+            assert final_state is not None, "Agent stream produced no output"
+        else:
+            final_state = agent.invoke(state)
 
         # Format and print output
         output = _format_output(final_state, args.output, args.verbose)

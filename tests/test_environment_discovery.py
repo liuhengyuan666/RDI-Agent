@@ -21,38 +21,54 @@ class TestDiscoverProjectLanguage:
     def test_detect_rust(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             Path(tmpdir, "Cargo.toml").write_text("[package]\nname = 'test'\n")
-            with patch.dict(os.environ, {}, clear=False), patch("os.getcwd", return_value=tmpdir):
-                assert discover_project_language() == "rust"
+            assert discover_project_language(search_dirs=[tmpdir]) == "rust"
 
     def test_detect_go(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             Path(tmpdir, "go.mod").write_text("module test\n")
-            with patch("os.getcwd", return_value=tmpdir):
-                assert discover_project_language() == "go"
+            assert discover_project_language(search_dirs=[tmpdir]) == "go"
 
     def test_detect_python(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             Path(tmpdir, "pyproject.toml").write_text("[project]\nname = 'test'\n")
-            with patch("os.getcwd", return_value=tmpdir):
-                assert discover_project_language() == "python"
+            assert discover_project_language(search_dirs=[tmpdir]) == "python"
 
     def test_detect_node(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             Path(tmpdir, "package.json").write_text('{"name": "test"}')
-            with patch("os.getcwd", return_value=tmpdir):
-                assert discover_project_language() == "node"
+            assert discover_project_language(search_dirs=[tmpdir]) == "node"
 
     def test_detect_polyglot(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             Path(tmpdir, "Cargo.toml").write_text("")
             Path(tmpdir, "go.mod").write_text("")
-            with patch("os.getcwd", return_value=tmpdir):
-                assert discover_project_language() == "polyglot"
+            assert discover_project_language(search_dirs=[tmpdir]) == "polyglot"
 
     def test_detect_unknown(self):
         with tempfile.TemporaryDirectory() as tmpdir:
+            assert discover_project_language(search_dirs=[tmpdir]) == "unknown"
+
+    def test_fallback_to_cwd(self):
+        """When search_dirs is None, should fall back to os.getcwd()."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir, "pyproject.toml").write_text("[project]\nname = 'test'\n")
             with patch("os.getcwd", return_value=tmpdir):
-                assert discover_project_language() == "unknown"
+                assert discover_project_language() == "python"
+
+    def test_detect_from_reproduce_target_dir(self):
+        """Simulate scanning a target directory from --reproduce command."""
+        with tempfile.TemporaryDirectory() as rust_dir:
+            Path(rust_dir, "Cargo.toml").write_text("[package]\nname = 'test'\n")
+            # cwd is some other Python project
+            with tempfile.TemporaryDirectory() as py_dir:
+                Path(py_dir, "pyproject.toml").write_text("[project]\nname = 'agent'\n")
+                with patch("os.getcwd", return_value=py_dir):
+                    # Without target dir: detects Python (cwd)
+                    assert discover_project_language() == "python"
+                    # With target dir: detects Rust (reproduce target)
+                    assert discover_project_language(search_dirs=[rust_dir, py_dir]) == "rust"
+                    # With target dir only: detects Rust
+                    assert discover_project_language(search_dirs=[rust_dir]) == "rust"
 
 
 class TestVerifyToolchainExecutable:

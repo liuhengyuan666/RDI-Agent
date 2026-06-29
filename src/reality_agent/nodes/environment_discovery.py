@@ -10,19 +10,73 @@ from reality_agent.state import RealityAgentState
 from reality_agent.tools.debug_tools import discover_project_language, verify_toolchain_executable
 
 
+def _extract_target_dirs_from_reproduce_cmd() -> list[str]:
+    """
+    Extract potential project directories from RDI_REPRODUCE_COMMAND.
+    
+    Heuristic: find path-like arguments (containing backslash or slash or .toml/.py/.rs/.go)
+    and return their parent directories. Falls back to empty list if no paths found.
+    """
+    import os
+    import re
+    from pathlib import Path
+
+    cmd = os.getenv("RDI_REPRODUCE_COMMAND", "")
+    if not cmd:
+        return []
+
+    # Pattern: match path-like strings (e.g., T:\work\test\Cargo.toml, ./foo.py, ../bar/go.mod)
+    # We look for tokens that contain path separators or file extensions
+    path_pattern = re.compile(r'[^\s"]+(?:\\[^\s"]+|/[^\s"]+)*\.?[a-zA-Z0-9_-]*')
+    
+    candidates = []
+    for token in cmd.split():
+        # Remove surrounding quotes if any
+        token = token.strip('"\'')
+        # Skip obvious non-paths (options, URLs, flags)
+        if token.startswith("-") or token.startswith("http"):
+            continue
+        if "\\" in token or "/" in token:
+            candidates.append(token)
+        # Also check for manifest files with just extension
+        elif any(token.endswith(ext) for ext in [".toml", ".py", ".rs", ".go", ".mod", ".json"]):
+            candidates.append(token)
+    
+    dirs = []
+    for path_str in candidates:
+        path = Path(path_str)
+        # If it's a file path, get its parent directory
+        if path.suffix:  # has extension like .toml, .py
+            dir_path = path.parent
+        else:
+            dir_path = path
+        # Only add if the directory actually exists
+        if dir_path.exists() and str(dir_path) not in dirs:
+            dirs.append(str(dir_path))
+    
+    return dirs
+
+
 def environment_discovery_node(state: RealityAgentState) -> Dict[str, Any]:
     """
     §0 Environment Discovery — the first physical checkpoint before any LLM or probe.
 
     Steps:
-    1. Scan cwd for language markers (Cargo.toml, go.mod, etc.)
+    1. Scan cwd and reproduce command target dirs for language markers (Cargo.toml, go.mod, etc.)
     2. Check if toolchain executable exists in PATH
     3. If missing: mark toolchain_available=False, prepare setup_plan
     4. If present: mark toolchain_available=True, proceed silently
 
     Returns state updates (no side effects, no sys.exit).
     """
-    lang = discover_project_language()
+    # Build search path: reproduce target dirs + cwd (fallback)
+    target_dirs = _extract_target_dirs_from_reproduce_cmd()
+    import os
+    cwd = os.getcwd()
+    if cwd not in target_dirs:
+        target_dirs.append(cwd)
+    
+    lang = discover_project_language(search_dirs=target_dirs)
     available, detail = verify_toolchain_executable(lang)
 
     updates: Dict[str, Any] = {

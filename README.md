@@ -314,10 +314,10 @@ RDI-Agent/
 │       ├── measurement_check.txt
 │       └── traps_detection.txt
 │
-├── tests/                                 # 128 test cases (123 passed, 5 skipped)
+├── tests/                                 # 130 test cases (125 passed, 5 skipped)
 │   ├── test_benchmark_tools.py
 │   ├── test_debug_tools.py
-│   ├── test_environment_discovery.py     # ⭐ NEW §0 Zero-Config discovery (18 cases)
+│   ├── test_environment_discovery.py     # ⭐ NEW §0 Zero-Config discovery (20 cases)
 │   ├── test_evidence_gate.py
 │   ├── test_force_patch.py
 │   ├── test_graph_routing.py            # ⭐ NEW LangGraph topology routing (8 cases)
@@ -343,7 +343,7 @@ RDI-Agent/
 ## 🧪 Testing
 
 ```bash
-# Full test suite (128 cases, 123 pass, 5 skip for optional real API/MCP)
+# Full test suite (130 cases, 125 pass, 5 skip for optional real API/MCP)
 pytest tests/ -v
 
 # Environment discovery tests (§0 Zero-Config)

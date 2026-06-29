@@ -76,13 +76,13 @@ python -c "from reality_agent.graph import compile_agent; print('Agent compiles 
 
 ## 3. 测试体系概览
 
-### 3.1 测试矩阵（128 个用例）
+### 3.1 测试矩阵（130 个用例）
 
 | 测试模块 | 用例数 | 类型 | 外部依赖 | 平均耗时 |
 |---------|--------|------|---------|---------|
 | `test_benchmark_tools.py` | 12 | 单元测试 | 无（mock subprocess） | <1s |
 | `test_debug_tools.py` | 8 | 单元测试 | Git 环境 | <1s |
-| `test_environment_discovery.py` | 18 | 单元测试 | 无（mock filesystem） | <1s |
+| `test_environment_discovery.py` | 20 | 单元测试 | 无（mock filesystem） | <1s |
 | `test_evidence_gate.py` | 6 | 单元测试 | 无 | <1s |
 | `test_force_patch.py` | 4 | 单元测试 | 无 | <1s |
 | `test_graph_routing.py` | 8 | 集成测试 | 无 | <1s |
@@ -96,7 +96,7 @@ python -c "from reality_agent.graph import compile_agent; print('Agent compiles 
 
 ### 3.2 测试分类说明
 
-- **🟢 必过测试（123 个）**：纯本地运行，零外部依赖， mock 隔离所有 I/O
+- **🟢 必过测试（125 个）**：纯本地运行，零外部依赖， mock 隔离所有 I/O
 - **🟡 可选测试（5 个）**：需配置环境变量激活，详见第 5 节
 
 ---
@@ -113,13 +113,13 @@ pytest tests/ -v
 **预期输出**：
 ```text
 ============================= test session starts =============================
-collected 128 items
+collected 130 items
 
 tests/test_benchmark_tools.py::TestRunBenchmark::test_benchmark_success PASSED [  1%]
 ...
 tests/test_success_criteria.py::TestSuccessCriteria::test_freeze_and_observe_recommended PASSED [100%]
 
-================== 123 passed, 5 skipped in 6.86s ==================
+================== 125 passed, 5 skipped in 6.86s ==================
 ```
 
 > **说明**：5 个 skipped 是**预期行为**（见 4.4 节），不代表故障。
@@ -346,7 +346,7 @@ jobs:
 
       - name: Run tests
         run: pytest tests/ -v --tb=short
-        # 预期：123 passed, 5 skipped（无需 DeepSeek API Key）
+        # 预期：125 passed, 5 skipped（无需 DeepSeek API Key）
 
       # 可选：仅在有密钥时运行真实 API 测试
       - name: Run DeepSeek real API tests
@@ -360,10 +360,10 @@ jobs:
 
 | 场景 | 运行命令 | 预期结果 |
 |------|---------|---------|
-| 日常开发 | `pytest tests/ -v` | 123 passed, 5 skipped |
+| 日常开发 | `pytest tests/ -v` | 125 passed, 5 skipped |
 | 预提交检查 | `pytest tests/ -v --tb=short` | 同上 |
-| 发布前验证 | `pytest tests/ -v` + 手动运行可选测试 | 128 passed |
-| CI 流水线 | `pytest tests/ -v` | 123 passed, 5 skipped（无需 secrets） |
+| 发布前验证 | `pytest tests/ -v` + 手动运行可选测试 | 130 passed |
+| CI 流水线 | `pytest tests/ -v` | 125 passed, 5 skipped（无需 secrets） |
 
 ---
 
@@ -380,7 +380,7 @@ python -c "import langgraph, pydantic, pytest; print('OK')"
 python -c "from reality_agent.graph import compile_agent; compile_agent(); print('OK')"
 
 # 4. 运行必过测试
-pytest tests/ -q                          # 应显示 123 passed, 5 skipped
+pytest tests/ -q                          # 应显示 125 passed, 5 skipped
 
 # 5. 验证环境变量（如有 API Key）
 python -c "import os; print('DEEPSEEK_API_KEY:', bool(os.getenv('DEEPSEEK_API_KEY')))"

@@ -29,7 +29,7 @@ class RealityAgentState(BaseModel):
         "Build_Knowledge",
         "Observe_Freeze",
         "END",
-    ] = Field(default="Reality_Check", description="当前所处的认知审计阶段")
+    ] = Field(default="Environment_Discovery", description="当前所处的认知审计阶段")
 
     # ------------------------------------------------------------------
     # 2. Evidence accumulation (§2 Verify Reality, §4 Evidence Gate)
