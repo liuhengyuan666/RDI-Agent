@@ -7,7 +7,11 @@ import os
 from typing import Any, Dict
 
 from reality_agent.state import RealityAgentState
-from reality_agent.tools.debug_tools import discover_project_language, verify_toolchain_executable
+from reality_agent.tools.debug_tools import (
+    discover_project_language,
+    run_static_check,
+    verify_toolchain_executable,
+)
 
 
 def _extract_target_dirs_from_reproduce_cmd() -> list[str]:
@@ -65,7 +69,7 @@ def environment_discovery_node(state: RealityAgentState) -> Dict[str, Any]:
     1. Scan cwd and reproduce command target dirs for language markers (Cargo.toml, go.mod, etc.)
     2. Check if toolchain executable exists in PATH
     3. If missing: mark toolchain_available=False, prepare setup_plan
-    4. If present: mark toolchain_available=True, proceed silently
+    4. If present: run static check probe, record results
 
     Returns state updates (no side effects, no sys.exit).
     """
@@ -94,9 +98,32 @@ def environment_discovery_node(state: RealityAgentState) -> Dict[str, Any]:
             "Halted before any static/runtime probe to prevent environment pollution."
         ]
     else:
-        updates["knowledge_gained"] = [
-            f"Environment Discovery: {lang} project detected, toolchain available at {detail}."
-        ]
+        # Toolchain available — run static check probe (§0.5)
+        static_result = run_static_check(state)
+        # Merge static check outputs into state
+        for key, val in static_result.items():
+            if key not in updates:
+                updates[key] = val
+        
+        static_passed = static_result.get("static_check_passed")
+        if static_passed is False:
+            # Compilation error — iron-clad evidence, no LLM needed
+            updates["knowledge_gained"] = [
+                f"Environment Discovery: {lang} project detected, toolchain available at {detail}. "
+                f"Static check FAILED: {static_result.get('static_stderr', '')[:200]}. "
+                "Compilation error is definitive evidence — skipping LLM analysis."
+            ]
+        elif static_passed is True:
+            updates["knowledge_gained"] = [
+                f"Environment Discovery: {lang} project detected, toolchain available at {detail}. "
+                "Static check passed (no compilation errors). Proceeding to runtime probes."
+            ]
+        else:
+            # Static check skipped (unknown language or no command)
+            updates["knowledge_gained"] = [
+                f"Environment Discovery: {lang} project detected, toolchain available at {detail}. "
+                "No static check configured (unknown language or explicit command missing)."
+            ]
 
     return updates
 

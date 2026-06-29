@@ -20,6 +20,7 @@ class RealityAgentState(BaseModel):
     # 1. Core cognitive phase (§1 七步框架)
     # ------------------------------------------------------------------
     current_phase: Literal[
+        "Start",
         "Environment_Discovery",
         "Setup_Guide",
         "Reality_Check",
@@ -29,7 +30,7 @@ class RealityAgentState(BaseModel):
         "Build_Knowledge",
         "Observe_Freeze",
         "END",
-    ] = Field(default="Environment_Discovery", description="当前所处的认知审计阶段")
+    ] = Field(default="Start", description="当前所处的认知审计阶段")
 
     # ------------------------------------------------------------------
     # 2. Evidence accumulation (§2 Verify Reality, §4 Evidence Gate)

@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from reality_agent.llm import get_llm
 from reality_agent.state import RealityAgentState
+from reality_agent.tools.debug_tools import reproduce_issue
 
 
 # ---------------------------------------------------------------------------
@@ -79,19 +80,30 @@ SYSTEM_PROMPT = _load_prompt("reality_check")
 # Heuristic fallback — 当 LLM 不可用时使用
 # ---------------------------------------------------------------------------
 
-def _heuristic_reality_check(state: RealityAgentState) -> Dict[str, Any]:
+def _heuristic_reality_check(state: RealityAgentState, reproduce_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Phase 2 heuristic stub when LLM is unavailable."""
     updates: Dict[str, Any] = {"current_phase": "Reality_Check"}
+    
+    # Determine effective tool outputs from state + reproduce command
+    tool_outputs = list(state.tool_outputs)
+    
+    # Only count reproduce outputs if the command was actually configured and executed
+    if reproduce_data and reproduce_data.get("exit_code") != -1:
+        tool_outputs.extend(reproduce_data.get("tool_outputs", []))
 
-    if not state.raw_logs and not state.tool_outputs:
+    if not state.raw_logs and not tool_outputs:
         updates["facts"] = ["User reported an issue without attached logs or traces."]
         updates["hypotheses"] = ["The issue exists in the described environment."]
         updates["evidence_level"] = "Observation"
         updates["trap_detected"] = "Explanation"
         updates["trap_details"] = "No logs provided. Request is explanation-driven."
     else:
-        # Check if reproduce_issue tool succeeded
-        reproduced = any("BUG REPRODUCED" in str(o) for o in state.tool_outputs)
+        # Check if reproduce_issue tool succeeded (exit != 0 means bug reproduced)
+        reproduced = False
+        if reproduce_data and reproduce_data.get("exit_code") not in (-1, 0):
+            reproduced = True
+        if not reproduced:
+            reproduced = any("BUG REPRODUCED" in str(o) for o in tool_outputs)
         if reproduced:
             updates["facts"] = ["Bug was successfully reproduced by automated tool."]
             updates["evidence_level"] = "Verified"
@@ -115,15 +127,32 @@ def reality_check_node(state: RealityAgentState) -> Dict[str, Any]:
     to force the model to produce facts/hypotheses separation.
     Otherwise falls back to heuristic stub.
     """
+    # First: execute reproduce command (§10 Step 1 — Runtime Execution Probe)
+    # This populates tool_outputs with the actual execution evidence
+    reproduce_result = reproduce_issue(state)
+    
+    # Merge reproduce outputs into accumulated state (Annotated[list, operator.add])
+    updates: Dict[str, Any] = {
+        "current_phase": "Reality_Check",
+    }
+    for key, val in reproduce_result.items():
+        if key not in updates:
+            updates[key] = val
+    
     # Check if LLM mode is enabled
     if os.getenv("RDI_LLM_MODE", "stub").lower() != "real":
-        return _heuristic_reality_check(state)
+        # Heuristic fallback: analyze state + reproduce outputs together
+        heuristic = _heuristic_reality_check(state, reproduce_data=reproduce_result)
+        for key, val in heuristic.items():
+            if key not in updates:
+                updates[key] = val
+        return updates
 
     try:
         llm = get_llm()
         structured_llm = llm.with_structured_output(RealityCheckBrainOutput)
 
-        # Build context from state
+        # Build context from state (including reproduce outputs now in state.tool_outputs)
         context = f"""User request: {state.user_request}
 
 Available logs:
@@ -154,9 +183,13 @@ Tool outputs:
         }
     except Exception as e:
         # Fail-safe: if LLM call fails, fall back to heuristic
-        fallback = _heuristic_reality_check(state)
+        fallback = _heuristic_reality_check(state, reproduce_data=reproduce_result)
         fallback["knowledge_gained"] = [
             f"LLM call failed ({e}), falling back to heuristic. "
             "Consider checking LLM_PROVIDER / LLM_API_KEY configuration."
         ]
+        # Merge reproduce results so they aren't lost
+        for key, val in reproduce_result.items():
+            if key not in fallback:
+                fallback[key] = val
         return fallback

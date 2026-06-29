@@ -20,9 +20,9 @@ class TestStateTransitions:
         assert agent is not None
 
     def test_initial_state_defaults(self):
-        """初始状态必须处于 Environment_Discovery 阶段 (§0 入口)."""
+        """初始状态必须处于 Start 阶段 (入口前的初始状态)."""
         state = RealityAgentState()
-        assert state.current_phase == "Environment_Discovery"
+        assert state.current_phase == "Start"
         assert state.evidence_level == "Observation"
         assert state.provenance_verified is False
 
