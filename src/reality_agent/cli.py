@@ -17,6 +17,7 @@ import os
 import sys
 from typing import Any, Dict, Optional
 
+from dotenv import load_dotenv
 from reality_agent.graph import compile_agent
 from reality_agent.state import RealityAgentState
 
@@ -246,6 +247,9 @@ def _format_output(
 
 def _main() -> int:
     """Main entry point."""
+    # Load .env file if present (project-level env vars)
+    load_dotenv()
+
     parser = _build_parser()
     args = parser.parse_args()
 
@@ -291,6 +295,9 @@ def _main() -> int:
         print(output)
 
         # Exit code based on whether iteration was allowed
+        # §0 Environment Discovery: toolchain missing → Exit Code 4 (safe halt)
+        if not final_state.get("toolchain_available", True):
+            return 4  # Infrastructure missing — setup guide printed, zero pollution
         if final_state.get("cognitive_debt_added"):
             return 2  # Unverified optimization (cognitive debt)
         if final_state.get("evidence_level") in ("Observation", "Hypothesis"):

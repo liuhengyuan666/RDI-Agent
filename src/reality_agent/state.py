@@ -20,6 +20,8 @@ class RealityAgentState(BaseModel):
     # 1. Core cognitive phase (§1 七步框架)
     # ------------------------------------------------------------------
     current_phase: Literal[
+        "Environment_Discovery",
+        "Setup_Guide",
         "Reality_Check",
         "Measurement_Check",
         "Evidence_Gate",
@@ -154,7 +156,23 @@ class RealityAgentState(BaseModel):
     )
 
     # ------------------------------------------------------------------
-    # 9. Structured observability log (§11)
+    # 10. Environment discovery (§0 Zero-Config)
+    # ------------------------------------------------------------------
+    detected_language: Optional[str] = Field(
+        default=None,
+        description="自动识别的项目语言: rust/python/go/node/polyglot/unknown",
+    )
+    toolchain_available: bool = Field(
+        default=True,
+        description="本地是否具备运行该语言工具链的环境",
+    )
+    setup_plan: Optional[str] = Field(
+        default=None,
+        description="当工具链缺失时，提供给人类的本地环境配置/安装指南",
+    )
+
+    # ------------------------------------------------------------------
+    # 11. Structured observability log (§11)
     # ------------------------------------------------------------------
     iteration_summary: Optional[dict] = Field(
         default=None,

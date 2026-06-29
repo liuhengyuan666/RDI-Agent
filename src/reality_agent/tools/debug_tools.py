@@ -13,11 +13,168 @@ from reality_agent.state import RealityAgentState
 # ---------------------------------------------------------------------------
 
 DEFAULT_REPRODUCE_COMMAND = "echo 'No RDI_REPRODUCE_COMMAND set. Please configure reproduce script.'"
+DEFAULT_STATIC_COMMAND = "echo 'No RDI_STATIC_COMMAND set. Set to cargo check / go build / python -m compileall . / npm run build etc.'"
 DEFAULT_BENCHMARK_COMMAND = "echo 'No RDI_BENCHMARK_COMMAND set. Please configure benchmark.'"
 
 
 # ---------------------------------------------------------------------------
-# §10 Step 1: Reproduce Issue
+# §0 Zero-Config: Environment Discovery
+# ---------------------------------------------------------------------------
+
+def discover_project_language() -> str:
+    """
+    Zero-Config: Auto-discover project language by physical feature markers.
+    
+    Scans os.getcwd() for well-known manifest files (Cargo.toml, go.mod, 
+    pyproject.toml, package.json). Returns the detected language or 'unknown'.
+    For monorepos with multiple markers, returns 'polyglot' (leaves to LLM 
+    or human for secondary intent classification).
+    """
+    import os
+    from pathlib import Path
+    
+    cwd = Path(os.getcwd())
+    
+    markers = {
+        "rust": ["Cargo.toml", "Cargo.lock"],
+        "go": ["go.mod", "go.sum"],
+        "python": ["pyproject.toml", "requirements.txt", "setup.py", "Pipfile"],
+        "node": ["package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml"],
+    }
+    
+    found = []
+    for lang, files in markers.items():
+        if any((cwd / f).exists() for f in files):
+            found.append(lang)
+    
+    if not found:
+        return "unknown"
+    if len(found) == 1:
+        return found[0]
+    return "polyglot"
+
+
+def verify_toolchain_executable(lang: str) -> tuple[bool, str]:
+    """
+    Verify toolchain executable exists in system PATH via shutil.which.
+    
+    Returns:
+        (available: bool, path_or_reason: str)
+    """
+    import shutil
+    
+    executables = {
+        "rust": "cargo",
+        "go": "go",
+        "python": "python",
+        "node": "node",
+    }
+    
+    exe = executables.get(lang)
+    if not exe:
+        # Unknown or generic language: default to available (user must specify command manually)
+        return True, ""
+    
+    path = shutil.which(exe)
+    if path:
+        return True, path
+    return False, f"Missing {exe} in system PATH."
+
+
+# ---------------------------------------------------------------------------
+# §0.5 Step 0: Static Check Probe (before LLM / runtime)
+# ---------------------------------------------------------------------------
+
+def run_static_check(state: RealityAgentState) -> dict[str, Any]:
+    """
+    First-order probe: compile / static check command.
+    
+    Priority:
+    1. RDI_STATIC_COMMAND env var (explicit user override)
+    2. Auto-inferred from detected_language (Zero-Config)
+    
+    Timeout: RDI_STATIC_TIMEOUT (default 60s) for heavy compilation.
+    
+    If exit code != 0: compiler error is iron-clad evidence — evidence_level
+    should be forced to 'Evidence' and runtime probe should be skipped.
+    """
+    import os
+    import subprocess
+    
+    # Priority 1: explicit user override
+    explicit_cmd = os.getenv("RDI_STATIC_COMMAND")
+    
+    # Priority 2: auto-infer from detected language
+    lang = state.detected_language or "unknown"
+    auto_cmds = {
+        "rust": "cargo check --message-format=json",
+        "go": "go build ./...",
+        "python": "python -m compileall .",  # Corrected: compileall recursively compiles .py files
+        "node": "npm run build",
+        "polyglot": None,
+        "unknown": None,
+    }
+    auto_cmd = auto_cmds.get(lang)
+    
+    if explicit_cmd:
+        cmd = explicit_cmd
+    elif auto_cmd:
+        cmd = auto_cmd
+    else:
+        return {
+            "tool_outputs": ["Static check: no explicit RDI_STATIC_COMMAND and language not recognized. Skipping."],
+            "static_check_passed": None,
+            "static_stdout": "",
+            "static_stderr": "",
+            "exit_code": 0,
+        }
+    
+    timeout = int(os.getenv("RDI_STATIC_TIMEOUT", "60"))
+    
+    try:
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "tool_outputs": [f"ERROR: Static check timed out after {timeout}s."],
+            "static_check_passed": False,
+            "static_stdout": "",
+            "static_stderr": f"Command timed out after {timeout}s",
+            "exit_code": -2,
+        }
+    except Exception as e:
+        return {
+            "tool_outputs": [f"ERROR: Static check execution failed: {e}"],
+            "static_check_passed": False,
+            "static_stdout": "",
+            "static_stderr": str(e),
+            "exit_code": -3,
+        }
+    
+    passed = result.returncode == 0
+    summary = (
+        f"Static check: {'PASS' if passed else 'FAIL'} (exit {result.returncode})\n"
+        f"Command: {cmd}\n"
+        f"stdout length: {len(result.stdout)} chars\n"
+        f"stderr length: {len(result.stderr)} chars"
+    )
+    
+    return {
+        "tool_outputs": [summary],
+        "static_check_passed": passed,
+        "static_stdout": result.stdout,
+        "static_stderr": result.stderr,
+        "exit_code": result.returncode,
+    }
+
+
+# ---------------------------------------------------------------------------
+# §10 Step 1: Reproduce Issue (Runtime Execution Probe)
 # ---------------------------------------------------------------------------
 
 def reproduce_issue(state: RealityAgentState) -> Dict[str, Any]:

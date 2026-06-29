@@ -7,6 +7,8 @@ from langgraph.graph import END, StateGraph
 
 from reality_agent.adapters.memory_adapter import get_memory_adapter
 from reality_agent.llm import get_llm
+from reality_agent.nodes.environment_discovery import environment_discovery_node
+from reality_agent.nodes.setup_guide import setup_guide_node
 from reality_agent.nodes.build_knowledge import build_knowledge_node
 from reality_agent.nodes.evidence_gate import evidence_gate_node
 from reality_agent.nodes.isolate_iteration import isolate_iteration_node
@@ -18,10 +20,12 @@ from reality_agent.state import RealityAgentState
 
 
 def build_graph() -> StateGraph:
-    """Construct the 7-step Reality-Driven Iteration graph."""
+    """Construct the 7-step Reality-Driven Iteration graph (with §0 Environment Discovery)."""
     workflow = StateGraph(RealityAgentState)
 
-    # Register all cognitive audit nodes (§1 七步框架)
+    # Register all nodes
+    workflow.add_node("environment_discovery", environment_discovery_node)
+    workflow.add_node("setup_guide", setup_guide_node)
     workflow.add_node("verify_reality", reality_check_node)
     workflow.add_node("verify_measurement", measurement_check_node)
     workflow.add_node("evidence_gate", evidence_gate_node)
@@ -29,8 +33,21 @@ def build_graph() -> StateGraph:
     workflow.add_node("build_knowledge", build_knowledge_node)
     workflow.add_node("observe_freeze", observe_freeze_node)
 
-    # Fixed entry point (§1)
-    workflow.set_entry_point("verify_reality")
+    # Fixed entry point (§0)
+    workflow.set_entry_point("environment_discovery")
+
+    # Conditional routing after discovery (§0 Zero-Config)
+    workflow.add_conditional_edges(
+        "environment_discovery",
+        route_after_discovery,
+        {
+            "verify_reality": "verify_reality",
+            "setup_guide": "setup_guide",
+        },
+    )
+
+    # Setup guide is terminal
+    workflow.add_edge("setup_guide", END)
 
     # Sequential edges (§2 → §3 → §4)
     workflow.add_edge("verify_reality", "verify_measurement")
@@ -73,8 +90,20 @@ def compile_agent() -> Any:
 
 
 # ---------------------------------------------------------------------------
-# Routing logic — hard-coded guardrails (§4)
+# Routing logic — hard-coded guardrails (§0, §4)
 # ---------------------------------------------------------------------------
+
+def route_after_discovery(state: RealityAgentState) -> Literal["verify_reality", "setup_guide"]:
+    """
+    §0 Environment Discovery — hard-cut if toolchain is missing.
+
+    If toolchain_available is False: route to setup_guide (terminal node).
+    If True: proceed to verify_reality (normal flow).
+    """
+    if not state.toolchain_available:
+        return "setup_guide"
+    return "verify_reality"
+
 
 def route_after_gate(state: RealityAgentState) -> Literal["isolate_iteration", "build_knowledge", "observe_freeze"]:
     """

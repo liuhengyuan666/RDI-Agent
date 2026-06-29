@@ -7,7 +7,7 @@
 
 > **Do not optimize on explanations. Optimize only on evidence.**
 >
-> A production-grade, runnable implementation of the Reality-Driven Iteration (RDI) SOP — a LangGraph-based cognitive guard agent that enforces Evidence-First auditing before any code modification.
+> A production-grade, runnable implementation of the Reality-Driven Iteration (RDI) SOP — a LangGraph-based cognitive guard agent that enforces Evidence-First auditing before any code modification. Features **Zero-Config environment discovery** (auto-detects Rust/Go/Python/Node), **three-stage probe matrix** (static check → runtime execution → LLM analysis), and **human-audit sovereignty** (dry-run by default, `--commit` required for persistence).
 
 This repository is the **reference implementation** of the [reality-driven-iteration](https://github.com/liuhengyuan666/reality-driven-iteration) behavioral SOP. While the skill version provides the cognitive contract, **RDI-Agent** provides the full execution infrastructure: subprocess tooling, LLM structured output, memory persistence, and a CLI with human-audit sovereignty.
 
@@ -123,11 +123,44 @@ rdi run --help
 
 **Human Audit Sovereignty:** By default, `--commit=False` means the agent runs in **dry-run mode** — it produces a scannable console report but **writes nothing to disk, no MCP server calls, no external side effects**. You must explicitly pass `--commit` to persist cognitive debt or knowledge.
 
+### Exit Codes
+
+| Code | Meaning | Trigger |
+|------|---------|---------|
+| `0` | Success | Evidence Gate passed, change accepted, or observation period entered |
+| `1` | Evidence Gate Block | `Observation`/`Hypothesis` level, or `provenance_verified=False` |
+| `2` | Runtime Error | Unhandled exception during graph execution |
+| `4` | Missing Toolchain | `toolchain_available=False` after environment discovery (§0) |
+| `5` | Unsupported Language | `detected_language=unknown` and no `RDI_STATIC_COMMAND` override |
+
+> **Note:** Exit code `4` triggers `setup_guide_node` which emits platform-specific installation instructions (e.g., `brew install rustup` on macOS, `apt install cargo` on Debian) before exiting.
+
 ---
 
 ## 🔧 The 7-Step Evidence-First Loop (Implementation)
 
-The agent is implemented as a LangGraph state machine with 6 nodes and conditional routing:
+The agent is implemented as a LangGraph state machine with 7 nodes (plus 2 conditional routing nodes) and 3-stage probe escalation:
+
+### Three-Stage Probe Matrix (§3 Evidence Gate)
+
+| Stage | Probe Type | When It Runs | Trigger |
+|-------|-----------|-------------|---------|
+| **Static Check** | `cargo check`, `go build`, `python -m compileall .`, `npm run build` | After environment discovery | Auto-detected or `RDI_STATIC_COMMAND` |
+| **Runtime Execution** | Reproduction script, benchmark, flamegraph | After static check passes | `--reproduce` or `RDI_REPRODUCE_COMMAND` |
+| **LLM Analysis** | Structured reasoning (RealityCheck, MeasurementCheck) | After both probes fail or goal is "investigate" | `--mode real` |
+
+**Escalation rule:**
+- Static check or runtime execution reveals root cause → **Skip LLM**, directly to isolate_iteration
+- Both probes inconclusive → **Escalate to LLM analysis**
+- Goal is "investigate" (no reproduction) → **Skip runtime probe**, go to LLM measurement verification
+- Static check fails with compilation error → **Immediate failure**, no LLM needed
+
+### 0. Environment Discovery (`environment_discovery`) ⭐ NEW
+- **Zero-Config:** Auto-detects project language from physical files (Cargo.toml → Rust, go.mod → Go, *.py → Python, package.json → Node)
+- **Toolchain verification:** `shutil.which` checks for `cargo`, `go`, `python`, `node` etc.
+- **Static probe execution:** Auto-runs `cargo check`, `go build`, `python -m compileall .`, `npm run build` (or `RDI_STATIC_COMMAND` override)
+- **Missing tool → graceful exit:** If toolchain is missing, emits platform-specific setup guide and exits with code `4`
+- **Intention routing:** "investigate" → measurement verification; "fix" → reproduction path
 
 ### 1. Verify Reality (`reality_check`)
 - Confirm the phenomenon exists (not cache, sampling, or version mismatch)
@@ -188,14 +221,17 @@ The agent is implemented as a LangGraph state machine with 6 nodes and condition
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  LangGraph Nodes (Domain)                                │
-│  ├── reality_check_node                                  │
-│  ├── measurement_check_node                              │
-│  ├── evidence_gate_node                                  │
-│  ├── isolate_iteration_node                              │
-│  ├── build_knowledge_node                                │
-│  └── observe_freeze_node                                 │
+│  ├── environment_discovery_node  ⭐ NEW (§0)              │
+│  ├── reality_check_node            (§1)                   │
+│  ├── measurement_check_node        (§2)                   │
+│  ├── evidence_gate_node            (§3)                   │
+│  ├── isolate_iteration_node        (§4)                   │
+│  ├── build_knowledge_node          (§5)                   │
+│  ├── observe_freeze_node           (§6)                   │
+│  └── setup_guide_node  ⭐ NEW (exit code 4)               │
 │                                                          │
 │  State: RealityAgentState (Pydantic, append-only lists)  │
+│  • detected_language, toolchain_available, setup_plan  ⭐ NEW │
 └─────────────────────────────────────────────────────────┘
                            │
                            ▼
@@ -257,6 +293,8 @@ RDI-Agent/
 │   │
 │   ├── nodes/                             # LangGraph cognitive audit nodes
 │   │   ├── __init__.py
+│   │   ├── environment_discovery.py       # ⭐ NEW §0 Zero-Config Environment Discovery
+│   │   ├── setup_guide.py                # ⭐ NEW Exit code 4 handler (missing toolchain)
 │   │   ├── reality_check.py              # §1 Verify Reality
 │   │   ├── measurement_check.py          # §2 Verify Measurement
 │   │   ├── evidence_gate.py             # §3 Evidence Gate (routing)
@@ -276,15 +314,18 @@ RDI-Agent/
 │       ├── measurement_check.txt
 │       └── traps_detection.txt
 │
-├── tests/                                 # 100 test cases (95 passed, 5 skipped)
+├── tests/                                 # 128 test cases (123 passed, 5 skipped)
 │   ├── test_benchmark_tools.py
 │   ├── test_debug_tools.py
+│   ├── test_environment_discovery.py     # ⭐ NEW §0 Zero-Config discovery (18 cases)
 │   ├── test_evidence_gate.py
 │   ├── test_force_patch.py
-│   ├── test_llm_structured_outputs.py    # DeepSeek real API tests (optional)
+│   ├── test_graph_routing.py            # ⭐ NEW LangGraph topology routing (8 cases)
+│   ├── test_llm_structured_outputs.py    # DeepSeek real API tests (optional, 3 skip)
 │   ├── test_measurement_rejection.py
 │   ├── test_memory_adapter.py
-│   ├── test_rdi_memguard_integration.py  # MCP mock integration tests
+│   ├── test_rdi_memguard_integration.py  # MCP mock integration tests (2 skip)
+│   ├── test_setup_guide.py            # ⭐ NEW Platform-specific setup guide (3 cases)
 │   ├── test_state_transitions.py
 │   └── test_success_criteria.py
 │
@@ -302,8 +343,13 @@ RDI-Agent/
 ## 🧪 Testing
 
 ```bash
-# Full test suite (100 cases, 98 pass, 2 skip for optional real API)
+# Full test suite (128 cases, 123 pass, 5 skip for optional real API/MCP)
 pytest tests/ -v
+
+# Environment discovery tests (§0 Zero-Config)
+pytest tests/test_environment_discovery.py -v
+pytest tests/test_setup_guide.py -v
+pytest tests/test_graph_routing.py -v
 
 # With DeepSeek real API (requires DEEPSEEK_API_KEY)
 DEEPSEEK_API_KEY=sk-... pytest tests/test_llm_structured_outputs.py::TestDeepSeekRealAPI -v
